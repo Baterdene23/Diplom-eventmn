@@ -1,0 +1,23 @@
+{
+  "name": "eventmn-scripts",
+  "version": "1.0.0",
+  "description": "Database seeding and utility scripts for EventMN",
+  "scripts": {
+    "seed": "node seed.js",
+    "seed:drop": "node seed.js --drop",
+    "mock": "node mock-data.js",
+    "generate": "node generate-test-data.js",
+    "generate:clean": "node generate-test-data.js --clean",
+    "generate:many": "node generate-test-data.js --count=20",
+    "dataset:real": "node seed-realistic-dataset.js",
+    "dataset:real:reset": "node seed-realistic-dataset.js --reset",
+    "cleanup:legacy": "node cleanup-legacy-data.js",
+    "cleanup:legacy:apply": "node cleanup-legacy-data.js --apply",
+    "cleanup:legacy:classic": "node cleanup-legacy-data.js --apply --include-classic-seed"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "mongodb": "^6.3.0",
+    "pg": "^8.11.3"
+  }
+}

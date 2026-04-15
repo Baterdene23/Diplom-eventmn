@@ -1,0 +1,112 @@
+// Prisma Schema for Event Service
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EventStatus {
+  DRAFT
+  PENDING
+  PUBLISHED
+  CANCELLED
+  COMPLETED
+}
+
+enum EventCategory {
+  CONCERT
+  CONFERENCE
+  WORKSHOP
+  MEETUP
+  SPORTS
+  WRESTLING      // Бөхийн барилдаан
+  EXHIBITION
+  OTHER
+}
+
+enum VenueType {
+  CONCERT_HALL     // Тоглолтын танхим
+  CONFERENCE_ROOM  // Хурлын танхим
+  ARENA            // Арена
+  WRESTLING_HALL   // Бөхийн өргөө
+  SPORTS_HALL      // Спорт заал
+  STADIUM          // Цэнгэлдэх
+  OUTDOOR          // Гадаа талбай
+  EXHIBITION_HALL  // Үзэсгэлэнгийн танхим
+  ONLINE           // Онлайн (виртуал)
+  OTHER
+}
+
+model Event {
+  id              String        @id @default(uuid())
+  title           String
+  description     String
+  category        EventCategory
+  venueId         String?       // Optional for online events
+  venueName       String?       // Optional for online events
+  startDate       DateTime
+  endDate         DateTime
+  images          String[]
+  thumbnail       String?
+  organizerId     String
+  organizerName   String
+  status          EventStatus   @default(DRAFT)
+  isFeatured      Boolean       @default(false)
+  tags            String[]
+  ticketInfo      Json?
+  rejectionReason String?
+  rejectedAt      DateTime?
+  rejectedBy      String?
+  
+  // Online event fields
+  isOnline        Boolean       @default(false)
+  meetingUrl      String?       // Google Meet, Zoom, etc. links
+  meetingPlatform String?       // 'google_meet', 'zoom', 'teams', etc.
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([status, startDate])
+  @@index([category])
+  @@index([organizerId])
+  @@index([title])
+  @@index([isOnline])
+}
+
+model Venue {
+  id          String    @id @default(uuid())
+  name        String
+  address     String
+  city        String
+  capacity    Int
+  venueType   VenueType @default(OTHER)
+  description String?
+  images      String[]
+  sections    Json?
+  
+  // Sports venue specific fields
+  hasWrestlingRing  Boolean  @default(false)   // Бөхийн тавцан
+  hasBoxingRing     Boolean  @default(false)   // Боксын ринг
+  hasTrack          Boolean  @default(false)   // Гүйлтийн зам
+  hasCourt          Boolean  @default(false)   // Талбай (сагсан бөмбөг гэх мэт)
+  
+  // Amenities
+  hasParking        Boolean  @default(false)
+  hasLockerRoom     Boolean  @default(false)
+  hasShower         Boolean  @default(false)
+  
+  createdBy   String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([city])
+  @@index([isActive])
+  @@index([name, city])
+  @@index([venueType])
+}

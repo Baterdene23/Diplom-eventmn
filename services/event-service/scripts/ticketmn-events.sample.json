@@ -1,0 +1,38 @@
+{
+  "events": [
+    {
+      "title": "Playtime Festival 2026 (Sample)",
+      "description": "Монголын хамгийн том хөгжмийн фестивалийн жишээ дата.",
+      "category": "CONCERT",
+      "startDate": "2026-07-03T10:00:00+08:00",
+      "endDate": "2026-07-05T23:00:00+08:00",
+      "images": ["/images/sample/playtime.jpg"],
+      "thumbnail": "/images/sample/playtime.jpg",
+      "tags": ["festival", "music", "ulaanbaatar"],
+      "venueName": "Үндэсний цэцэрлэгт хүрээлэн",
+      "address": "Баянзүрх дүүрэг, УБ",
+      "city": "Улаанбаатар",
+      "capacity": 15000,
+      "sections": [
+        { "id": "general", "name": "Энгийн", "rows": 1, "seatsPerRow": 15000, "price": 120000, "color": "#3b82f6" }
+      ],
+      "ticketInfo": [
+        { "sectionId": "general", "sectionName": "Энгийн", "price": 120000, "available": 15000, "total": 15000 }
+      ]
+    },
+    {
+      "title": "UB Comedy Night (Sample)",
+      "description": "Stand-up comedy эвентийн жишээ дата.",
+      "category": "OTHER",
+      "startDate": "2026-05-20T19:30:00+08:00",
+      "endDate": "2026-05-20T22:00:00+08:00",
+      "images": ["/images/sample/comedy.jpg"],
+      "thumbnail": "/images/sample/comedy.jpg",
+      "tags": ["comedy", "standup"],
+      "venueName": "UB Palace",
+      "address": "Баянзүрх, Улаанбаатар",
+      "city": "Улаанбаатар",
+      "capacity": 1200
+    }
+  ]
+}

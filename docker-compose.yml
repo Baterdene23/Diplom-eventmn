@@ -1,0 +1,323 @@
+services:
+  # ===========================================
+  # DATABASES
+  # ===========================================
+  
+  # Main PostgreSQL Database (Shared schemas per service)
+  # Үүрэг: Бүх сервисүүдийн өгөгдлийг нэг DB дээр schema-аар салгаж хадгалах
+  # Шаардлага: СШ6 - Өгөгдлийн санг ашиглан мэдээллийг хадгалах
+  postgres:
+    image: postgres:15-alpine
+    container_name: eventmn-postgres
+    environment:
+      POSTGRES_DB: eventmn
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123456
+    ports:
+      # NOTE: Host дээр local PostgreSQL ажиллаж байвал 5432 давхардаж болно.
+      # Prisma Studio / scripts-оос Docker DB руу холбогдохын тулд host port-ыг 5433 болгосон.
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - eventmn-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d eventmn"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis - Session & Seat Locking
+  # Үүрэг: Суудал түгжих (TTL 10 минут), session cache
+  # Шаардлага: СШ10 - Суудал сонгох үед түгжих механизм
+  # Шаардлага: СШ11 - Олон хэрэглэгч нэгэн зэрэг суудал сонгоход зөрчилгүй (concurrency)
+  # Шаардлага: ФБШ8 - Суудал түгжих хугацаа 10 минутаас хэтрэхгүй
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - eventmn-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ===========================================
+  # MESSAGE BROKER
+  # ===========================================
+  
+  # RabbitMQ - Асинхрон мессеж дамжуулах
+  # Үүрэг: Сервисүүд хооронд асинхрон харилцаа (booking -> notification)
+  # Шаардлага: СШ7 - REST API ашиглан сервисүүд хооронд харилцах
+  # Давуу тал: Сервисүүдийн хамаарлыг багасгах (loose coupling)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbitmq
+      RABBITMQ_DEFAULT_PASS: rabbitmq123
+    ports:
+      - "5672:5672"   # AMQP protocol
+      - "15672:15672" # Management UI (http://localhost:15672)
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - eventmn-network
+    healthcheck:
+      # NOTE: `rabbitmq-diagnostics ping` becomes OK before AMQP listener (5672)
+      # is actually accepting connections. Services that connect on startup may
+      # fail with ECONNREFUSED, so check the port listener instead.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_listener", "5672"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # ===========================================
+  # MICROSERVICES
+  # ===========================================
+  # Шаардлага: СШ1 - Микросервис архитектур ашиглан хөгжүүлэгдсэн байх
+
+  # User Service - Хэрэглэгчийн удирдлага
+  # Шаардлага: СШ2 - Хэрэглэгчийн бүртгэл, нэвтрэлт болон эрхийн түвшинг удирдах
+  # Шаардлага: СШ8 - Token ашиглан хэрэглэгчийг баталгаажуулах (JWT)
+  # Шаардлага: ФБШ3 - Нууц үгийг hash хэлбэрээр хадгалах (bcrypt)
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: user-service
+    ports:
+      - "3001:3000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:123456@postgres:5432/eventmn?schema=user
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
+      REFRESH_TOKEN_EXPIRES_IN: ${REFRESH_TOKEN_EXPIRES_IN:-7d}
+      RABBITMQ_URL: amqp://rabbitmq:rabbitmq123@rabbitmq:5672
+      # OTP Provider (Email): resend | smtp
+      OTP_EMAIL_PROVIDER: ${OTP_EMAIL_PROVIDER:-resend}
+      EMAIL_FROM: ${OTP_EMAIL_FROM:-no-reply@eventmn.mn}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SMTP_HOST: ${USER_SMTP_HOST:-}
+      SMTP_PORT: ${USER_SMTP_PORT:-587}
+      SMTP_USER: ${USER_SMTP_USER:-}
+      SMTP_PASS: ${USER_SMTP_PASS:-}
+      # OTP Provider (SMS): Twilio
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      # In development, if provider creds are missing OTP is logged to console by default
+      OTP_DEV_LOG_FALLBACK: ${OTP_DEV_LOG_FALLBACK:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eventmn-network
+    restart: unless-stopped
+
+  # Event Service - Арга хэмжээний удирдлага
+  # Шаардлага: СШ3 - Эвент үүсгэх, засварлах, устгах, хайх
+  # Шаардлага: СШ9 - Суудлын зураглалыг хадгалах, харуулах
+  # Шаардлага: СШ12 - Суудлын төрөл, үнийн ангиллыг дэмжих (VIP, Standard)
+  event-service:
+    build:
+      context: ./services/event-service
+      dockerfile: Dockerfile
+    container_name: event-service
+    ports:
+      - "3002:3000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:123456@postgres:5432/eventmn?schema=event
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://rabbitmq:rabbitmq123@rabbitmq:5672
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eventmn-network
+    restart: unless-stopped
+
+  # Booking Service - Захиалгын удирдлага
+  # Шаардлага: СШ4 - Эвентэд бүртгүүлэх болон бүртгэл цуцлах
+  # Шаардлага: СШ10 - Суудал сонгох үед түгжих (seat locking) механизм
+  # Шаардлага: СШ11 - Олон хэрэглэгч нэгэн зэрэг суудал сонгоход зөрчилгүй (concurrency)
+  # Шаардлага: ФБШ8 - Суудал түгжих хугацаа 10 минутаас хэтрэхгүй (Redis TTL=600s)
+  booking-service:
+    build:
+      context: ./services/booking-service
+      dockerfile: Dockerfile
+    container_name: booking-service
+    ports:
+      - "3003:3000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:123456@postgres:5432/eventmn?schema=booking
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://rabbitmq:rabbitmq123@rabbitmq:5672
+      SEAT_LOCK_TTL: 600
+      # Event reminder scheduler (producer)
+      EVENT_REMINDER_ENABLED: ${EVENT_REMINDER_ENABLED:-true}
+      EVENT_REMINDER_INTERVAL_MINUTES: ${EVENT_REMINDER_INTERVAL_MINUTES:-15}
+      EVENT_REMINDER_WINDOW_START_HOURS: ${EVENT_REMINDER_WINDOW_START_HOURS:-23}
+      EVENT_REMINDER_WINDOW_END_HOURS: ${EVENT_REMINDER_WINDOW_END_HOURS:-25}
+      EVENT_REMINDER_DEDUPE_TTL_SECONDS: ${EVENT_REMINDER_DEDUPE_TTL_SECONDS:-172800}
+      # Event Service URL (internal communication)
+      EVENT_SERVICE_URL: http://event-service:3000
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eventmn-network
+    restart: unless-stopped
+
+  # Notification Service - Мэдэгдлийн удирдлага
+  # Шаардлага: СШ5 - Хэрэглэгчид эвентийн талаарх мэдэгдлийг илгээх
+  # Шаардлага: ХШ6 - Эвент өөрчлөгдөх эсвэл цуцлагдах үед мэдэгдэл хүлээн авах
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: notification-service
+    ports:
+      - "3004:3000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:123456@postgres:5432/eventmn?schema=notification
+      RABBITMQ_URL: amqp://rabbitmq:rabbitmq123@rabbitmq:5672
+      # SMTP Configuration (Email илгээх)
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-EventMN <noreply@eventmn.mn>}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eventmn-network
+    restart: unless-stopped
+
+  # ===========================================
+  # API GATEWAY
+  # ===========================================
+  # Үүрэг: Нэг цэгээс бүх API хүсэлтүүдийг хүлээн авч, тохирох сервис рүү чиглүүлэх
+  # Шаардлага: СШ7 - REST API ашиглан сервисүүд хооронд харилцах
+  # Давуу тал: 
+  #   - Нэгдсэн API endpoint (http://localhost:3000)
+  #   - Rate limiting, CORS, logging нэгтгэх боломж
+  #   - JWT баталгаажуулалтыг нэг дор хийх
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: gateway
+    ports:
+      - "3000:3000"  # Гадаад API endpoint
+    environment:
+      NODE_ENV: development
+      # Microservice URLs (Docker network дотор)
+      USER_SERVICE_URL: http://user-service:3000
+      EVENT_SERVICE_URL: http://event-service:3000
+      BOOKING_SERVICE_URL: http://booking-service:3000
+      NOTIFICATION_SERVICE_URL: http://notification-service:3000
+      # JWT баталгаажуулалт (СШ8)
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      # Browser CORS (comma-separated)
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+    depends_on:
+      - user-service
+      - event-service
+      - booking-service
+      - notification-service
+    networks:
+      - eventmn-network
+    restart: unless-stopped
+
+  # ===========================================
+  # FRONTEND
+  # ===========================================
+  # Үүрэг: Хэрэглэгчийн интерфэйс (Next.js 14)
+  # Шаардлага: ФБШ1 - Хэрэглэгчийн интерфейс ээлтэй, хялбар ашиглах
+  # Шаардлага: ФБШ2 - Гар утас болон компьютерт тохирсон дизайн (responsive)
+  # Технологи: Next.js 14, React, Tailwind CSS, TypeScript
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://127.0.0.1:3000
+    container_name: frontend
+    ports:
+      - "8080:3000"  # http://localhost:8080
+    environment:
+      NODE_ENV: production
+      # API Gateway-ийн URL (browser-ээс хандах)
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:3000
+    depends_on:
+      - gateway
+    networks:
+      - eventmn-network
+    restart: unless-stopped
+
+# ===========================================
+# VOLUMES - Өгөгдөл хадгалах (Persistent Storage)
+# ===========================================
+# Docker container устгасан ч өгөгдөл хадгалагдана
+# Шаардлага: СШ6 - Өгөгдлийн санг ашиглан мэдээллийг хадгалах
+
+volumes:
+  # PostgreSQL volume
+  postgres-data:
+    name: eventmn-postgres-data
+
+  # Redis & RabbitMQ volumes
+  redis-data:
+    name: eventmn-redis-data
+  rabbitmq-data:
+    name: eventmn-rabbitmq-data
+
+# ===========================================
+# NETWORKS - Сервисүүдийн сүлжээ
+# ===========================================
+# Шаардлага: СШ1 - Микросервис архитектур (isolated network)
+# Бүх сервисүүд нэг виртуал сүлжээнд холбогдоно
+# Container нэрээр хандах боломжтой (e.g., http://user-service:3000)
+
+networks:
+  eventmn-network:
+    name: eventmn-network
+    driver: bridge

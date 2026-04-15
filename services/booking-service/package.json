@@ -1,0 +1,35 @@
+{
+  "name": "booking-service",
+  "version": "1.0.0",
+  "description": "Booking and seat management microservice",
+  "scripts": {
+    "dev": "next dev -p 3003",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "node prisma/seed.js"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "next": "14.2.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@prisma/client": "^5.14.0",
+    "ioredis": "^5.4.1",
+    "amqplib": "^0.10.4",
+    "zod": "^3.23.8",
+    "nanoid": "^5.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/react": "^18.3.3",
+    "@types/amqplib": "^0.10.5",
+    "typescript": "^5.4.5",
+    "prisma": "^5.14.0"
+  }
+}

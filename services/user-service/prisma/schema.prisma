@@ -1,0 +1,137 @@
+// Prisma Schema for User Service
+// Database: PostgreSQL
+// Normalized to 3NF (Third Normal Form)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ХЭРЭГЛЭГЧИЙН ХҮСНЭГТ (1NF, 2NF, 3NF)
+// ============================================
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  phone         String?   @unique
+  password      String
+  firstName     String    @map("first_name")
+  lastName      String    @map("last_name")
+  avatar        String?
+  role          Role      @default(USER)
+  isVerified    Boolean   @default(false) @map("is_verified")
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  otps              UserOtp[]
+  refreshTokens     RefreshToken[]
+  organizerProfile  OrganizerProfile?
+  activityLogs      UserActivityLog[]
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+  @@map("users")
+}
+
+// ============================================
+// ХЭРЭГЛЭГЧИЙН ҮҮРЭГ (Role)
+// ============================================
+enum Role {
+  USER       // Энгийн хэрэглэгч - эвент хайх, захиалах
+  ORGANIZER  // Зохион байгуулагч - эвент үүсгэх, удирдах
+  ADMIN      // Админ - бүх эрхтэй
+}
+
+// ============================================
+// ЗОХИОН БАЙГУУЛАГЧИЙН ПРОФАЙЛ (3NF - Тусдаа хүснэгт)
+// ============================================
+model OrganizerProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique @map("user_id")
+  organizationName String? @map("organization_name")
+  description     String?
+  website         String?
+  socialLinks     Json?    @map("social_links") // { facebook, instagram, twitter }
+  logo            String?
+  isVerified      Boolean  @default(false) @map("is_verified")
+  verifiedAt      DateTime? @map("verified_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("organizer_profiles")
+}
+
+// ============================================
+// OTP БАТАЛГААЖУУЛАЛТ (1NF, 2NF, 3NF)
+// ============================================
+model UserOtp {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  code      String
+  type      OtpType
+  target    String   // email эсвэл phone number
+  expiresAt DateTime @map("expires_at")
+  isUsed    Boolean  @default(false) @map("is_used")
+  attempts  Int      @default(0) // Буруу оролдлогын тоо
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([code, type])
+  @@map("user_otps")
+}
+
+enum OtpType {
+  EMAIL_VERIFY     // И-мэйл баталгаажуулах
+  PHONE_VERIFY     // Утас баталгаажуулах
+  PASSWORD_RESET   // Нууц үг сэргээх
+  BECOME_ORGANIZER // Зохион байгуулагч болох
+}
+
+// ============================================
+// REFRESH TOKEN (Session Management)
+// ============================================
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  userAgent String?  @map("user_agent")
+  ipAddress String?  @map("ip_address")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ============================================
+// ХЭРЭГЛЭГЧИЙН ҮЙЛ АЖИЛЛАГААНЫ ЛОГ (Audit Trail)
+// ============================================
+model UserActivityLog {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  action    String   // LOGIN, LOGOUT, PASSWORD_CHANGE, ROLE_CHANGE, etc.
+  details   Json?    // Нэмэлт мэдээлэл
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([action])
+  @@map("user_activity_logs")
+}

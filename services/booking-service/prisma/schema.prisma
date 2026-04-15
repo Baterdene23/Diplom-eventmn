@@ -1,0 +1,75 @@
+// Prisma Schema for Booking Service
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Захиалгын хүснэгт
+model Booking {
+  id            String        @id @default(uuid())
+  userId        String        @map("user_id")
+  userEmail     String        @map("user_email")
+  userName      String        @map("user_name")
+  eventId       String        @map("event_id")
+  eventTitle    String        @map("event_title")
+  eventDate     DateTime      @map("event_date")
+  venueId       String        @map("venue_id")
+  venueName     String        @map("venue_name")
+  totalAmount   Float         @map("total_amount")
+  status        BookingStatus @default(PENDING)
+  qrCode        String?       @map("qr_code")
+  paymentId     String?       @map("payment_id")
+  paymentMethod String?       @map("payment_method")
+  paidAt        DateTime?     @map("paid_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  seats BookingSeat[]
+
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  PENDING     // Хүлээгдэж буй (төлбөр хийгээгүй)
+  CONFIRMED   // Баталгаажсан (төлбөр хийсэн)
+  CANCELLED   // Цуцалсан
+  EXPIRED     // Хугацаа дууссан
+}
+
+// Захиалсан суудлуудын хүснэгт
+model BookingSeat {
+  id          String  @id @default(uuid())
+  bookingId   String  @map("booking_id")
+  sectionId   String  @map("section_id")
+  sectionName String  @map("section_name")
+  row         Int
+  seatNumber  Int     @map("seat_number")
+  price       Float
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, sectionId, row, seatNumber])
+  @@map("booking_seats")
+}
+
+// Суудлын түгжээ (Log зориулалтаар - Redis primary)
+model SeatLock {
+  id        String   @id @default(uuid())
+  eventId   String   @map("event_id")
+  sectionId String   @map("section_id")
+  row       Int
+  seat      Int
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([eventId, sectionId, row, seat])
+  @@map("seat_locks")
+}
