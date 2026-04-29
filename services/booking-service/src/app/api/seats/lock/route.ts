@@ -1,17 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { lockSeats } from '@/lib/redis';
+import { lockSeatIds, lockSeats } from '@/lib/redis';
 import { z } from 'zod';
 import { requireGatewaySignature } from '@/lib/internal-auth';
 
 // Суудал түгжих validation
-const lockSeatsSchema = z.object({
-  eventId: z.string().min(1),
-  seats: z.array(z.object({
-    sectionId: z.string(),
-    row: z.number(),
-    seatNumber: z.number(),
-  })).min(1).max(10), // Max 10 суудал нэг дор
-});
+const lockSeatsSchema = z
+  .object({
+    eventId: z.string().min(1),
+    // V1 (legacy grid): sectionId/row/seatNumber
+    seats: z
+      .array(
+        z.object({
+          sectionId: z.string(),
+          row: z.number(),
+          seatNumber: z.number(),
+        })
+      )
+      .optional(),
+    // V2: seatId (supports non-grid layouts)
+    seatIds: z.array(z.string().min(1)).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const count = (Array.isArray(data.seatIds) ? data.seatIds.length : 0) + (Array.isArray(data.seats) ? data.seats.length : 0);
+    if (count <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'seats эсвэл seatIds шаардлагатай', path: [] });
+    }
+    if (count > 10) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Нэг дор хамгийн ихдээ 10 сонгоно', path: [] });
+    }
+  });
 
 // POST /api/seats/lock - Суудал түгжих
 export async function POST(request: NextRequest) {
@@ -36,9 +53,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { eventId, seats } = validationResult.data;
+    const { eventId } = validationResult.data;
 
-    // Redis-ээр суудлуудыг түгжих
+    // Prefer seatIds (V2) if provided
+    if (Array.isArray(validationResult.data.seatIds) && validationResult.data.seatIds.length > 0) {
+      const result = await lockSeatIds(eventId, validationResult.data.seatIds, userId);
+
+      if (!result.success) {
+        return NextResponse.json(
+          {
+            error: 'Зарим суудал аль хэдийн сонгогдсон байна',
+            failedSeatIds: result.failedSeatIds,
+            lockedSeatIds: result.lockedSeatIds,
+          },
+          { status: 409 }
+        );
+      }
+
+      return NextResponse.json({
+        message: 'Суудлууд амжилттай түгжигдлээ',
+        lockedSeatIds: result.lockedSeatIds,
+        expiresIn: 600,
+      });
+    }
+
+    const seats = validationResult.data.seats || [];
     const result = await lockSeats(eventId, seats, userId);
 
     if (!result.success) {

@@ -109,10 +109,10 @@ export function Footer() {
 
         <div className="border-t border-gray-800 mt-12 pt-8 flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-gray-500 text-sm">
-            © 2024 EventMN. Бүх эрх хуулиар хамгаалагдсан.
+            © 2026 EventMN. Бүх эрх хуулиар хамгаалагдсан.
           </p>
           <p className="text-gray-500 text-sm">
-            Microservices Architecture Demo - Diploma Project
+            Microservices Architecture  - Diploma Project
           </p>
         </div>
       </div>

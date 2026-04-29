@@ -1,26 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { getSeatLock } from '@/lib/redis';
+import { getSeatIdLock, getSeatLock } from '@/lib/redis';
 import { publishMessage, ROUTING_KEYS } from '@/lib/rabbitmq';
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import { requireGatewaySignature } from '@/lib/internal-auth';
 
 // Захиалга үүсгэх validation
-const createBookingSchema = z.object({
+const createBookingSchema = z
+  .object({
   eventId: z.string().min(1),
   eventTitle: z.string().min(1),
   eventDate: z.string().transform(str => new Date(str)),
   venueId: z.string().min(1),
   venueName: z.string().min(1),
-  seats: z.array(z.object({
-    sectionId: z.string(),
-    sectionName: z.string(),
-    row: z.number(),
-    seatNumber: z.number(),
-    price: z.number(),
-  })).min(1),
-});
+  // Accept both legacy grid and new seatId-based format
+  seats: z
+    .array(
+      z.object({
+        seatId: z.string().min(1).optional(),
+        sectionId: z.string(),
+        sectionName: z.string(),
+        row: z.number().optional(),
+        seatNumber: z.number().optional(),
+        price: z.number(),
+      })
+    )
+    .min(1),
+  })
+  .superRefine((data, ctx) => {
+    data.seats.forEach((s, idx) => {
+      if (!s.seatId) {
+        if (typeof s.row !== 'number' || typeof s.seatNumber !== 'number') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Legacy суудалд row ба seatNumber шаардлагатай',
+            path: ['seats', idx],
+          });
+        }
+      }
+    });
+  });
 
 // GET /api/bookings - Захиалгын жагсаалт
 export async function GET(request: NextRequest) {
@@ -123,13 +143,37 @@ export async function POST(request: NextRequest) {
 
     // Суудлууд түгжигдсэн эсэхийг шалгах (энэ хэрэглэгчийн түгжээ мөн эсэх)
     for (const seat of seats) {
-      const lockOwner = await getSeatLock(eventId, seat.sectionId, seat.row, seat.seatNumber);
-      
+      if (seat.seatId) {
+        const lockOwner = await getSeatIdLock(eventId, seat.seatId);
+        if (lockOwner !== userId) {
+          return NextResponse.json(
+            {
+              error: 'Суудлын түгжээ дууссан эсвэл өөр хэрэглэгч түгжсэн байна',
+              seat: `${seat.sectionName} - ${seat.seatId}`,
+            },
+            { status: 409 }
+          );
+        }
+        continue;
+      }
+
+      const row = typeof seat.row === 'number' ? seat.row : null;
+      const seatNumber = typeof seat.seatNumber === 'number' ? seat.seatNumber : null;
+      if (row === null || seatNumber === null) {
+        return NextResponse.json(
+          {
+            error: 'Legacy суудалд row ба seatNumber шаардлагатай',
+            seat: seat.sectionName,
+          },
+          { status: 400 }
+        );
+      }
+      const lockOwner = await getSeatLock(eventId, seat.sectionId, row, seatNumber);
       if (lockOwner !== userId) {
         return NextResponse.json(
-          { 
+          {
             error: 'Суудлын түгжээ дууссан эсвэл өөр хэрэглэгч түгжсэн байна',
-            seat: `${seat.sectionName} - Эгнээ ${seat.row}, Суудал ${seat.seatNumber}`,
+            seat: `${seat.sectionName} - Эгнээ ${row}, Суудал ${seatNumber}`,
           },
           { status: 409 }
         );
@@ -157,11 +201,13 @@ export async function POST(request: NextRequest) {
         qrCode,
         status: 'PENDING',
         seats: {
-          create: seats.map(seat => ({
+          create: seats.map((seat) => ({
+            eventId,
+            seatId: seat.seatId || null,
             sectionId: seat.sectionId,
             sectionName: seat.sectionName,
-            row: seat.row,
-            seatNumber: seat.seatNumber,
+            row: seat.seatId ? null : (typeof seat.row === 'number' ? seat.row : null),
+            seatNumber: seat.seatId ? null : (typeof seat.seatNumber === 'number' ? seat.seatNumber : null),
             price: seat.price,
           })),
         },
@@ -181,13 +227,14 @@ export async function POST(request: NextRequest) {
       eventTitle: booking.eventTitle,
       eventDate: booking.eventDate.toISOString(),
       venueName: booking.venueName,
-      seats: booking.seats.map((s) => ({
-        sectionName: s.sectionName,
-        row: s.row,
-        seatNumber: s.seatNumber,
-      })),
-      totalAmount: booking.totalAmount,
-    });
+       seats: booking.seats.map((s) => ({
+         seatId: s.seatId || undefined,
+         sectionName: s.sectionName,
+         row: s.row ?? undefined,
+         seatNumber: s.seatNumber ?? undefined,
+       })),
+       totalAmount: booking.totalAmount,
+     });
 
     return NextResponse.json(
       {

@@ -1,16 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { unlockSeat } from '@/lib/redis';
+import { unlockSeat, unlockSeatId } from '@/lib/redis';
 import { z } from 'zod';
 import { requireGatewaySignature } from '@/lib/internal-auth';
 
-const unlockSeatsSchema = z.object({
-  eventId: z.string().min(1),
-  seats: z.array(z.object({
-    sectionId: z.string(),
-    row: z.number(),
-    seatNumber: z.number(),
-  })),
-});
+const unlockSeatsSchema = z
+  .object({
+    eventId: z.string().min(1),
+    seats: z
+      .array(
+        z.object({
+          sectionId: z.string(),
+          row: z.number(),
+          seatNumber: z.number(),
+        })
+      )
+      .optional(),
+    seatIds: z.array(z.string().min(1)).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const count = (Array.isArray(data.seatIds) ? data.seatIds.length : 0) + (Array.isArray(data.seats) ? data.seats.length : 0);
+    if (count <= 0) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'seats эсвэл seatIds шаардлагатай', path: [] });
+  });
 
 // POST /api/seats/unlock - Суудлын түгжээ тайлах
 export async function POST(request: NextRequest) {
@@ -35,13 +45,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { eventId, seats } = validationResult.data;
+    const { eventId } = validationResult.data;
 
-    const results = await Promise.all(
-      seats.map(seat => 
-        unlockSeat(eventId, seat.sectionId, seat.row, seat.seatNumber, userId)
-      )
-    );
+    const seatIds = Array.isArray(validationResult.data.seatIds) ? validationResult.data.seatIds : [];
+    const seats = Array.isArray(validationResult.data.seats) ? validationResult.data.seats : [];
+
+    const results = await Promise.all([
+      ...seatIds.map((seatId) => unlockSeatId(eventId, seatId, userId)),
+      ...seats.map((seat) => unlockSeat(eventId, seat.sectionId, seat.row, seat.seatNumber, userId)),
+    ]);
 
     const unlockedCount = results.filter(Boolean).length;
 

@@ -24,6 +24,10 @@ export function getRedisClient(): Redis {
 // Суудал түгжих хугацаа (seconds)
 const SEAT_LOCK_TTL = Number.parseInt(process.env.SEAT_LOCK_TTL || '600', 10);
 
+function seatKey(eventId: string, seatId: string): string {
+  return `seat2:${eventId}:${seatId}`;
+}
+
 // Lua script: Олон суудлыг атомаар түгжих
 // Бүх суудал сул байвал түгжинэ, нэг ч сул биш бол бүгдийг түгжихгүй
 const LOCK_SEATS_LUA = `
@@ -173,6 +177,76 @@ export async function lockSeats(
       failedKey,
     };
   }
+}
+
+// V2: seatId-based locking (supports non-grid layouts)
+export async function lockSeatIds(
+  eventId: string,
+  seatIds: string[],
+  userId: string
+): Promise<{ success: boolean; lockedSeatIds: string[]; failedSeatIds: string[]; failedKey?: string }>{
+  const redis = getRedisClient();
+  const clean = Array.from(new Set(seatIds.map((s) => String(s || '').trim()).filter(Boolean)));
+  const keys = clean.map((sid) => seatKey(eventId, sid));
+
+  if (keys.length === 0) {
+    return { success: false, lockedSeatIds: [], failedSeatIds: seatIds };
+  }
+
+  const result = await redis.eval(
+    LOCK_SEATS_LUA,
+    keys.length,
+    ...keys,
+    userId,
+    SEAT_LOCK_TTL.toString()
+  ) as [number, string];
+
+  const [success, failedKey] = result;
+  if (success === 1) {
+    return { success: true, lockedSeatIds: clean, failedSeatIds: [] };
+  }
+
+  const failedIndex = keys.indexOf(failedKey);
+  const failedSeatId = failedIndex >= 0 ? [clean[failedIndex]] : clean;
+  return { success: false, lockedSeatIds: [], failedSeatIds: failedSeatId, failedKey };
+}
+
+export async function getSeatIdLock(eventId: string, seatId: string): Promise<string | null> {
+  const redis = getRedisClient();
+  return redis.get(seatKey(eventId, seatId));
+}
+
+export async function unlockSeatId(eventId: string, seatId: string, userId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  const key = seatKey(eventId, seatId);
+  const result = await redis.eval(UNLOCK_SEAT_LUA, 1, key, userId);
+  return result === 1;
+}
+
+export async function getEventSeatIdLocks(eventId: string): Promise<Map<string, string>> {
+  const redis = getRedisClient();
+  const pattern = `seat2:${eventId}:*`;
+  const status = new Map<string, string>();
+
+  let cursor = '0';
+  const keys: string[] = [];
+  do {
+    const [newCursor, foundKeys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+    cursor = newCursor;
+    keys.push(...foundKeys);
+  } while (cursor !== '0');
+
+  if (keys.length > 0) {
+    const values = await redis.mget(keys);
+    keys.forEach((key, idx) => {
+      const parts = key.split(':');
+      const seatId = parts.slice(2).join(':');
+      const v = values[idx];
+      if (v) status.set(seatId, v);
+    });
+  }
+
+  return status;
 }
 
 /**

@@ -158,6 +158,8 @@ services:
         condition: service_healthy
     networks:
       - eventmn-network
+    volumes:
+      - event-uploads:/app/public/uploads
     restart: unless-stopped
 
   # Booking Service - Захиалгын удирдлага
@@ -309,6 +311,10 @@ volumes:
     name: eventmn-redis-data
   rabbitmq-data:
     name: eventmn-rabbitmq-data
+
+  # Event image uploads (public/uploads)
+  event-uploads:
+    name: eventmn-event-uploads
 
 # ===========================================
 # NETWORKS - Сервисүүдийн сүлжээ

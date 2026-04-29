@@ -101,17 +101,22 @@ export default function BookingConfirmPage() {
   const handleCancel = async () => {
     try {
       if (eventId && selectedSeats.length > 0) {
-        await bookingApi.unlockSeats(
-          {
-            eventId,
-            seats: selectedSeats.map((s) => ({
-              sectionId: s.sectionId,
-              row: s.row,
-              seatNumber: s.seatNumber,
-            })),
-          },
-          accessToken!
-        );
+        const seatIds = selectedSeats.map((s: any) => s.seatId).filter(Boolean) as string[];
+        if (seatIds.length === selectedSeats.length && seatIds.length > 0) {
+          await bookingApi.unlockSeats({ eventId, seatIds }, accessToken!);
+        } else {
+          await bookingApi.unlockSeats(
+            {
+              eventId,
+              seats: selectedSeats.map((s: any) => ({
+                sectionId: s.sectionId,
+                row: s.row,
+                seatNumber: s.seatNumber,
+              })),
+            },
+            accessToken!
+          );
+        }
       }
     } catch (err) {
       console.error('Failed to unlock seats:', err);
@@ -135,13 +140,14 @@ export default function BookingConfirmPage() {
           eventDate: event?.date || event?.startDate || new Date().toISOString(),
           venueId: venue?._id || '',
           venueName: venue?.name || '',
-          seats: selectedSeats.map((s) => ({
-            sectionId: s.sectionId,
-            sectionName: s.sectionName,
-            row: s.row,
-            seatNumber: s.seatNumber,
-            price: s.price,
-          })),
+              seats: selectedSeats.map((s) => ({
+                seatId: (s as any).seatId,
+                sectionId: s.sectionId,
+                sectionName: s.sectionName,
+                row: (s as any).row,
+                seatNumber: (s as any).seatNumber,
+                price: s.price,
+              })),
           totalPrice: getTotalPrice(),
         },
         accessToken!

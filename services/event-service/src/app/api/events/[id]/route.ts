@@ -2,8 +2,29 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireGatewaySignature } from '@/lib/internal-auth';
 import { publishMessage, ROUTING_KEYS } from '@/lib/rabbitmq';
+import { LayoutTypeEnum, validateEventCategoryLayoutType, validateSeatLayoutJson } from '@/lib/layout';
+import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
+
+const patchEventSchema = z
+  .object({
+    layoutType: LayoutTypeEnum.optional(),
+    layoutJson: z.custom<import('@prisma/client').Prisma.InputJsonValue>().optional(),
+  })
+  .passthrough()
+  .superRefine((data, ctx) => {
+    if (data.layoutJson) {
+      const res = validateSeatLayoutJson(data.layoutJson);
+      if (!res.ok) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'layoutJson буруу байна',
+          path: ['layoutJson'],
+        });
+      }
+    }
+  });
 
 // GET /api/events/[id] - Event дэлгэрэнгүй
 export async function GET(
@@ -70,9 +91,25 @@ export async function PATCH(
 
     const body = await request.json();
 
+    const validationResult = patchEventSchema.safeParse(body);
+    if (!validationResult.success) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: validationResult.error.errors },
+        { status: 400 }
+      );
+    }
+
+    // Enforce category-layout compatibility when layoutType is changed
+    if (validationResult.data.layoutType) {
+      const ok = validateEventCategoryLayoutType(event.category, validationResult.data.layoutType);
+      if (!ok.ok) {
+        return NextResponse.json({ error: ok.message }, { status: 400 });
+      }
+    }
+
     // Admin-ий status шинэчлэх эрх
-    if (body.status && userRole !== 'ADMIN') {
-      delete body.status;
+    if (validationResult.data.status && userRole !== 'ADMIN') {
+      delete (validationResult.data as any).status;
     }
 
     // Published эвентэд organizer засвар хийхийг хориглох (business rule)
@@ -85,7 +122,7 @@ export async function PATCH(
 
     const updatedEvent = await prisma.event.update({
       where: { id: params.id },
-      data: body,
+      data: validationResult.data,
     });
 
     // Publish best-effort update event for downstream notifications/audit.

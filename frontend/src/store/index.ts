@@ -39,10 +39,11 @@ export const useAuthStore = create<AuthState>()(
 
 // Booking store - сонгосон суудлууд
 interface Seat {
+  seatId?: string;
   sectionId: string;
   sectionName: string;
-  row: number;
-  seatNumber: number;
+  row?: number;
+  seatNumber?: number;
   price: number;
 }
 
@@ -50,7 +51,7 @@ interface BookingState {
   selectedSeats: Seat[];
   eventId: string | null;
   addSeat: (seat: Seat) => void;
-  removeSeat: (sectionId: string, row: number, seatNumber: number) => void;
+  removeSeat: (seat: { seatId?: string; sectionId: string; row?: number; seatNumber?: number }) => void;
   clearSeats: () => void;
   setEventId: (eventId: string) => void;
   getTotalPrice: () => number;
@@ -63,12 +64,18 @@ export const useBookingStore = create<BookingState>((set, get) => ({
     set((state) => ({
       selectedSeats: [...state.selectedSeats, seat],
     })),
-  removeSeat: (sectionId, row, seatNumber) =>
-    set((state) => ({
-      selectedSeats: state.selectedSeats.filter(
-        (s) => !(s.sectionId === sectionId && s.row === row && s.seatNumber === seatNumber)
-      ),
-    })),
+  removeSeat: (seat) =>
+    set((state) => {
+      const seatId = seat?.seatId ? String(seat.seatId) : null;
+      if (seatId) {
+        return { selectedSeats: state.selectedSeats.filter((s) => s.seatId !== seatId) };
+      }
+      return {
+        selectedSeats: state.selectedSeats.filter(
+          (s) => !(s.sectionId === seat.sectionId && (s.row || 0) === (seat.row || 0) && (s.seatNumber || 0) === (seat.seatNumber || 0))
+        ),
+      };
+    }),
   clearSeats: () => set({ selectedSeats: [], eventId: null }),
   setEventId: (eventId) => set({ eventId }),
   getTotalPrice: () => get().selectedSeats.reduce((sum, seat) => sum + seat.price, 0),

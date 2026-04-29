@@ -109,6 +109,7 @@ export default function UserDashboard() {
           limit: 4,
           status: 'PUBLISHED',
           upcoming: true,
+          recommend: true,
           ...(interest.length > 0 ? { tags: interest } : null),
         })) as { events: Event[] };
         setRecommendedEvents(eventsData.events || []);

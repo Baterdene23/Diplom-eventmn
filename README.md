@@ -725,6 +725,263 @@ curl -X POST http://localhost:3000/api/seats/lock \
   }'
 ```
 
+## Хавсралтын код (хамгийн чухал)
+
+Доорх хэсгүүд нь дипломын тайлангийн хавсралтад оруулахад хамгийн өндөр нотолгоотой кодын сонголт болно.
+
+### Хавсралт А: Authentication (JWT + OTP)
+
+Эх сурвалж:
+- services/user-service/src/lib/auth.ts
+- services/user-service/src/app/api/auth/verify-otp/route.ts
+
+```ts
+// services/user-service/src/lib/auth.ts
+export function verifyToken(token: string): TokenPayload | null {
+  try {
+    return jwt.verify(token, getJwtSecret()) as TokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+export function extractTokenFromHeader(authHeader: string | null): string | null {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  return authHeader.substring(7);
+}
+```
+
+```ts
+// services/user-service/src/app/api/auth/verify-otp/route.ts (core flow)
+const token = extractTokenFromHeader(request.headers.get('authorization'));
+if (!token) return NextResponse.json({ error: 'Нэвтрэх шаардлагатай' }, { status: 401 });
+
+const payload = verifyToken(token);
+if (!payload) return NextResponse.json({ error: 'Token буруу эсвэл хугацаа дууссан' }, { status: 401 });
+
+const otpResult = await verifyOtp(payload.userId, code, type as OtpType);
+if (!otpResult.success) return NextResponse.json({ error: otpResult.error }, { status: 400 });
+
+if (type === 'BECOME_ORGANIZER') {
+  const updatedUser = await prisma.user.update({
+    where: { id: payload.userId },
+    data: { role: 'ORGANIZER' },
+    select: { id: true, email: true, role: true },
+  });
+  const newAccessToken = generateAccessToken({ userId: updatedUser.id, email: updatedUser.email, role: updatedUser.role });
+  const newRefreshToken = generateRefreshToken({ userId: updatedUser.id, email: updatedUser.email, role: updatedUser.role });
+  return NextResponse.json({ message: 'Та амжилттай зохион байгуулагч боллоо!', user: updatedUser, accessToken: newAccessToken, refreshToken: newRefreshToken });
+}
+```
+
+### Хавсралт Б: Booking ба Seat Lock (Redis)
+
+Эх сурвалж:
+- services/booking-service/src/lib/redis.ts
+- services/booking-service/src/app/api/bookings/route.ts
+
+```ts
+// services/booking-service/src/lib/redis.ts
+export async function lockSeat(eventId: string, sectionId: string, row: number, seatNumber: number, userId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  const key = `seat:${eventId}:${sectionId}:${row}:${seatNumber}`;
+  const result = await redis.set(key, userId, 'EX', SEAT_LOCK_TTL, 'NX');
+  return result === 'OK';
+}
+
+export async function unlockSeat(eventId: string, sectionId: string, row: number, seatNumber: number, userId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  const key = `seat:${eventId}:${sectionId}:${row}:${seatNumber}`;
+  const result = await redis.eval(UNLOCK_SEAT_LUA, 1, key, userId);
+  return result === 1;
+}
+
+export async function lockSeats(eventId: string, seats: Array<{ sectionId: string; row: number; seatNumber: number }>, userId: string) {
+  const redis = getRedisClient();
+  const keys = seats.map(seat => `seat:${eventId}:${seat.sectionId}:${seat.row}:${seat.seatNumber}`);
+  const [success] = await redis.eval(LOCK_SEATS_LUA, keys.length, ...keys, userId, SEAT_LOCK_TTL.toString()) as [number, string];
+  return { success: success === 1 };
+}
+```
+
+```ts
+// services/booking-service/src/app/api/bookings/route.ts (atomic nested write)
+const booking = await prisma.booking.create({
+  data: {
+    userId,
+    userEmail,
+    userName,
+    eventId,
+    eventTitle,
+    eventDate,
+    venueId,
+    venueName,
+    totalAmount,
+    qrCode,
+    status: 'PENDING',
+    seats: {
+      create: seats.map(seat => ({
+        sectionId: seat.sectionId,
+        sectionName: seat.sectionName,
+        row: seat.row,
+        seatNumber: seat.seatNumber,
+        price: seat.price,
+      })),
+    },
+  },
+  include: { seats: true },
+});
+```
+
+Тайлбар: Одоогийн кодонд confirm endpoint дээр Prisma $transaction explicit байдлаар ашиглаагүй. Харин booking + booking_seats хадгалалт нь нэг nested write-аар атомаар хийгдэж байна.
+
+### Хавсралт В: RabbitMQ Notification (Publish + Consumer)
+
+Эх сурвалж:
+- services/booking-service/src/lib/rabbitmq.ts
+- services/notification-service/src/lib/consumer.ts
+
+```ts
+// services/booking-service/src/lib/rabbitmq.ts
+export async function publishMessage(routingKey: string, message: Record<string, unknown>): Promise<boolean> {
+  try {
+    const ch = await getChannel();
+    const content = Buffer.from(JSON.stringify(message));
+    const result = ch.publish(EXCHANGE, routingKey, content, {
+      persistent: true,
+      contentType: 'application/json',
+    });
+    return result;
+  } catch {
+    return false;
+  }
+}
+```
+
+```ts
+// services/notification-service/src/lib/consumer.ts
+async function handleBookingConfirmed(data: Record<string, unknown>) {
+  const { bookingId, userId, eventTitle } = data as { bookingId: string; userId: string; eventTitle: string };
+
+  await prisma.notification.create({
+    data: {
+      userId,
+      type: 'BOOKING_CONFIRMED',
+      title: 'Захиалга баталгаажлаа',
+      message: `"${eventTitle}" арга хэмжээний захиалга амжилттай баталгаажлаа.`,
+      data: { bookingId, eventTitle },
+      emailSent: false,
+    },
+  });
+}
+
+export async function startConsumers() {
+  await consumeQueue(QUEUES.BOOKING_CREATED, handleBookingCreated);
+  await consumeQueue(QUEUES.BOOKING_CONFIRMED, handleBookingConfirmed);
+  await consumeQueue(QUEUES.BOOKING_CANCELLED, handleBookingCancelled);
+}
+```
+
+### Хавсралт Г: API Gateway (Routing + Auth)
+
+Эх сурвалж:
+- gateway/src/app/api/[...path]/route.ts
+- gateway/src/lib/auth.ts
+
+```ts
+// gateway/src/lib/auth.ts
+export function verifyToken(token: string): TokenPayload | null {
+  try {
+    return jwt.verify(token, getJwtSecret()) as TokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+export function extractTokenFromHeader(authHeader: string | null): string | null {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  return authHeader.substring(7);
+}
+```
+
+```ts
+// gateway/src/app/api/[...path]/route.ts (routing + forwarding)
+if (!isPublicPath(method, fullPath) || isMineEventsRequest) {
+  const token = extractTokenFromHeader(request.headers.get('authorization'));
+  if (!token) return NextResponse.json({ error: 'Нэвтрэх шаардлагатай' }, { status: 401, headers: CORS_HEADERS });
+
+  const payload = verifyToken(token);
+  if (!payload) return NextResponse.json({ error: 'Token буруу эсвэл хугацаа дууссан' }, { status: 401, headers: CORS_HEADERS });
+
+  headers.set('x-user-id', payload.userId);
+  headers.set('x-user-email', payload.email);
+  headers.set('x-user-role', payload.role);
+}
+
+const response = await fetch(targetUrl.toString(), {
+  method: forwardMethod,
+  headers,
+  body: forwardMethod !== 'GET' && forwardMethod !== 'HEAD' ? JSON.stringify(await request.json()) : undefined,
+});
+```
+
+### Хавсралт Д: Prisma Schema (Booking domain)
+
+Эх сурвалж:
+- services/booking-service/prisma/schema.prisma
+
+```prisma
+model Booking {
+  id          String        @id @default(uuid())
+  userId      String        @map("user_id")
+  eventId     String        @map("event_id")
+  totalAmount Float         @map("total_amount")
+  status      BookingStatus @default(PENDING)
+  seats       BookingSeat[]
+  @@map("bookings")
+}
+
+model BookingSeat {
+  id         String  @id @default(uuid())
+  bookingId  String  @map("booking_id")
+  sectionId  String  @map("section_id")
+  row        Int
+  seatNumber Int     @map("seat_number")
+  booking    Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  @@unique([bookingId, sectionId, row, seatNumber])
+  @@map("booking_seats")
+}
+
+model SeatLock {
+  id        String   @id @default(uuid())
+  eventId   String   @map("event_id")
+  sectionId String   @map("section_id")
+  row       Int
+  seat      Int
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  @@unique([eventId, sectionId, row, seat])
+  @@map("seat_locks")
+}
+```
+
+## Хамгийн бага хувилбар (3 код)
+
+Хэрэв хавсралтаа заавал богиносгох бол зөвхөн дараах 3-г үлдээхэд хангалттай:
+
+1. JWT middleware: verifyToken + extractTokenFromHeader
+2. Redis seat lock: lockSeat (бол unlockSeat)
+3. RabbitMQ publishMessage
+
+## Оруулахгүй зүйлс
+
+- Энгийн CRUD controller
+- UI component
+- Давхардсан endpoint
+- Хэт урт, тайлбарлахад төвөгтэй код
+
 ## License
 
 MIT

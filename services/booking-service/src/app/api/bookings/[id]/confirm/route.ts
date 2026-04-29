@@ -93,8 +93,14 @@ export async function POST(
     const redis = getRedisClient();
     const pipeline = redis.pipeline();
     for (const seat of booking.seats) {
-      const key = `seat:${booking.eventId}:${seat.sectionId}:${seat.row}:${seat.seatNumber}`;
-      pipeline.del(key);
+      if (typeof seat.row === 'number' && typeof seat.seatNumber === 'number') {
+        const key = `seat:${booking.eventId}:${seat.sectionId}:${seat.row}:${seat.seatNumber}`;
+        pipeline.del(key);
+      }
+
+      if (seat.seatId) {
+        pipeline.del(`seat2:${booking.eventId}:${seat.seatId}`);
+      }
     }
     await pipeline.exec();
 
@@ -108,9 +114,10 @@ export async function POST(
       eventDate: booking.eventDate.toISOString(),
       venueName: booking.venueName,
       seats: booking.seats.map(s => ({
+        seatId: s.seatId || undefined,
         sectionName: s.sectionName,
-        row: s.row,
-        seatNumber: s.seatNumber,
+        row: s.row ?? undefined,
+        seatNumber: s.seatNumber ?? undefined,
       })),
       totalAmount: booking.totalAmount,
       qrCode: booking.qrCode,

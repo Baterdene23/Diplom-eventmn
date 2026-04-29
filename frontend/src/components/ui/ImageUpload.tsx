@@ -185,7 +185,11 @@ export default function ImageUpload({
                 </div>
               ) : (
                 <img
-                  src={image.url.startsWith('blob:') ? image.url : image.url}
+                  src={
+                    image.url.startsWith('blob:')
+                      ? image.url
+                      : image.url
+                  }
                   alt={image.originalName}
                   className="w-full h-full object-cover"
                 />

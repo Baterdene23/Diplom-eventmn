@@ -219,7 +219,19 @@ export const authApi = {
 
 // Events API
 export const eventsApi = {
-  getAll: (params?: { page?: number; category?: string; search?: string; tags?: string[]; dateRange?: 'today' | 'week' | 'month'; hasTickets?: boolean; limit?: number; status?: string; city?: string; upcoming?: boolean }) => {
+  getAll: (params?: {
+    page?: number;
+    category?: string;
+    search?: string;
+    tags?: string[];
+    dateRange?: 'today' | 'week' | 'month';
+    hasTickets?: boolean;
+    limit?: number;
+    status?: string;
+    city?: string;
+    upcoming?: boolean;
+    recommend?: boolean;
+  }) => {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', params.page.toString());
     if (params?.category) {
@@ -233,6 +245,7 @@ export const eventsApi = {
       const clean = params.tags.map((t) => String(t || '').trim()).filter(Boolean);
       if (clean.length > 0) searchParams.set('tags', clean.join(','));
     }
+    if (params?.recommend) searchParams.set('recommend', 'true');
     if (params?.dateRange) searchParams.set('dateRange', params.dateRange);
     if (typeof params?.hasTickets === 'boolean') searchParams.set('hasTickets', String(params.hasTickets));
     if (params?.city) searchParams.set('city', params.city);
@@ -263,6 +276,8 @@ export const eventsApi = {
       const event = res?.event ? normalizeEvent(res.event) : res?.event;
       return { ...res, ...(event ? { event } : null) };
     }),
+
+  getLayout: (id: string) => api<any>(`/api/events/${id}/layout`),
     
   // Organizer endpoints
   create: (data: any, token: string) =>
@@ -308,10 +323,20 @@ export const venuesApi = {
 
 // Booking API
 export const bookingApi = {
-  lockSeats: (data: { eventId: string; seats: Array<{ sectionId: string; row: number; seatNumber: number }> }, token: string) =>
+  lockSeats: (
+    data:
+      | { eventId: string; seats: Array<{ sectionId: string; row: number; seatNumber: number }> }
+      | { eventId: string; seatIds: string[] },
+    token: string
+  ) =>
     apiWithAuthRetry('/api/seats/lock', { method: 'POST', body: JSON.stringify(data), token }),
     
-  unlockSeats: (data: { eventId: string; seats: Array<{ sectionId: string; row: number; seatNumber: number }> }, token: string) =>
+  unlockSeats: (
+    data:
+      | { eventId: string; seats: Array<{ sectionId: string; row: number; seatNumber: number }> }
+      | { eventId: string; seatIds: string[] },
+    token: string
+  ) =>
     apiWithAuthRetry('/api/seats/unlock', { method: 'POST', body: JSON.stringify(data), token }),
     
   getSeatsStatus: (eventId: string) =>

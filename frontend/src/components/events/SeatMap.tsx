@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 
 interface Seat {
+  seatId?: string;
   sectionId: string;
   sectionName: string;
   row: number;
@@ -19,6 +20,7 @@ interface SeatMapProps {
     seatsPerRow: number;
     price: number;
     color: string;
+    capacity?: number;
   }>;
   lockedSeats: Array<{ sectionId: string; row: number; seatNumber: number }>;
   bookedSeats: Array<{ sectionId: string; row: number; seatNumber: number }>;
@@ -48,16 +50,20 @@ export function SeatMap({
   const sectionStats = useMemo(() => {
     return sections.map(section => {
       const totalSeats = section.rows * section.seatsPerRow;
+      const capacity = typeof section.capacity === 'number' && Number.isFinite(section.capacity)
+        ? Math.max(0, Math.floor(section.capacity))
+        : totalSeats;
       const bookedCount = bookedSeats.filter(s => s.sectionId === section.id).length;
       const lockedCount = lockedSeats.filter(s => s.sectionId === section.id).length;
-      const availableCount = totalSeats - bookedCount - lockedCount;
+      const availableCount = capacity - bookedCount - lockedCount;
       return {
         ...section,
         totalSeats,
+        capacity,
         bookedCount,
         lockedCount,
         availableCount,
-        availablePercent: Math.round((availableCount / totalSeats) * 100),
+        availablePercent: capacity > 0 ? Math.round((availableCount / capacity) * 100) : 0,
       };
     });
   }, [sections, bookedSeats, lockedSeats]);
@@ -78,6 +84,17 @@ export function SeatMap({
 
   const currentSection = sections.find(s => s.id === activeSection);
   const currentStats = sectionStats.find(s => s.id === activeSection);
+
+  const isSeatInCapacity = (sectionId: string, row: number, seatNumber: number) => {
+    const stats = sectionStats.find((s) => s.id === sectionId);
+    const cap = stats?.capacity;
+    if (typeof cap !== 'number') return true;
+    if (cap <= 0) return false;
+
+    const base = (row - 1) * (stats?.seatsPerRow || 0);
+    const index = base + seatNumber;
+    return index >= 1 && index <= cap;
+  };
 
   return (
     <div className="space-y-6">
@@ -285,6 +302,7 @@ export function SeatMap({
                         {/* Left side seats */}
                         {Array.from({ length: Math.ceil(currentSection.seatsPerRow / 2) }, (_, seatIndex) => {
                           const seatNum = seatIndex + 1;
+                          const inCapacity = isSeatInCapacity(currentSection.id, rowIndex + 1, seatNum);
                           const status = getSeatStatus(currentSection.id, rowIndex + 1, seatNum);
                           const seat: Seat = {
                             sectionId: currentSection.id,
@@ -297,10 +315,11 @@ export function SeatMap({
                           return (
                             <button
                               key={`left-${seatIndex}`}
-                              onClick={() => status === 'available' || status === 'selected' ? onSeatClick(seat) : null}
-                              disabled={status === 'booked' || status === 'locked'}
+                              onClick={() => inCapacity && (status === 'available' || status === 'selected') ? onSeatClick(seat) : null}
+                              disabled={!inCapacity || status === 'booked' || status === 'locked'}
                               className={cn(
                                 'w-9 h-9 rounded-t-lg rounded-b-md text-xs font-medium transition-all duration-200 relative',
+                                !inCapacity && 'bg-transparent border-2 border-transparent cursor-default',
                                 status === 'available' && 'bg-white border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 cursor-pointer hover:scale-110',
                                 status === 'selected' && 'bg-primary-500 text-white border-2 border-primary-600 shadow-lg shadow-primary-500/30 scale-110',
                                 status === 'locked' && 'bg-amber-100 border-2 border-amber-300 cursor-not-allowed',
@@ -308,12 +327,13 @@ export function SeatMap({
                               )}
                               style={status === 'selected' ? { backgroundColor: currentSection.color || '#6366f1' } : {}}
                               title={
+                                !inCapacity ? '' :
                                 status === 'booked' ? 'Баталгаажсан' :
                                 status === 'locked' ? 'Түр түгжигдсэн (10 мин)' :
                                 `${rowLabel} эгнээ, ${seatNum} суудал - ${currentSection.price.toLocaleString()}₮`
                               }
                             >
-                              {seatNum}
+                              {inCapacity ? seatNum : ''}
                             </button>
                           );
                         })}
@@ -326,6 +346,7 @@ export function SeatMap({
                         {/* Right side seats */}
                         {Array.from({ length: Math.floor(currentSection.seatsPerRow / 2) }, (_, seatIndex) => {
                           const seatNum = Math.ceil(currentSection.seatsPerRow / 2) + seatIndex + 1;
+                          const inCapacity = isSeatInCapacity(currentSection.id, rowIndex + 1, seatNum);
                           const status = getSeatStatus(currentSection.id, rowIndex + 1, seatNum);
                           const seat: Seat = {
                             sectionId: currentSection.id,
@@ -338,10 +359,11 @@ export function SeatMap({
                           return (
                             <button
                               key={`right-${seatIndex}`}
-                              onClick={() => status === 'available' || status === 'selected' ? onSeatClick(seat) : null}
-                              disabled={status === 'booked' || status === 'locked'}
+                              onClick={() => inCapacity && (status === 'available' || status === 'selected') ? onSeatClick(seat) : null}
+                              disabled={!inCapacity || status === 'booked' || status === 'locked'}
                               className={cn(
                                 'w-9 h-9 rounded-t-lg rounded-b-md text-xs font-medium transition-all duration-200 relative',
+                                !inCapacity && 'bg-transparent border-2 border-transparent cursor-default',
                                 status === 'available' && 'bg-white border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 cursor-pointer hover:scale-110',
                                 status === 'selected' && 'bg-primary-500 text-white border-2 border-primary-600 shadow-lg shadow-primary-500/30 scale-110',
                                 status === 'locked' && 'bg-amber-100 border-2 border-amber-300 cursor-not-allowed',
@@ -349,12 +371,13 @@ export function SeatMap({
                               )}
                               style={status === 'selected' ? { backgroundColor: currentSection.color || '#6366f1' } : {}}
                               title={
+                                !inCapacity ? '' :
                                 status === 'booked' ? 'Баталгаажсан' :
                                 status === 'locked' ? 'Түр түгжигдсэн (10 мин)' :
                                 `${rowLabel} эгнээ, ${seatNum} суудал - ${currentSection.price.toLocaleString()}₮`
                               }
                             >
-                              {seatNum}
+                              {inCapacity ? seatNum : ''}
                             </button>
                           );
                         })}

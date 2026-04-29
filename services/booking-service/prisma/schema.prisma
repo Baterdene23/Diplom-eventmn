@@ -47,15 +47,21 @@ enum BookingStatus {
 model BookingSeat {
   id          String  @id @default(uuid())
   bookingId   String  @map("booking_id")
+  eventId     String  @map("event_id")
+  seatId      String? @map("seat_id")
   sectionId   String  @map("section_id")
   sectionName String  @map("section_name")
-  row         Int
-  seatNumber  Int     @map("seat_number")
+  // Optional to support non-grid layouts (seatId-based bookings).
+  // For legacy grid bookings, both fields are populated.
+  row         Int?
+  seatNumber  Int?    @map("seat_number")
   price       Float
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
   @@unique([bookingId, sectionId, row, seatNumber])
+  @@unique([eventId, seatId])
+  @@unique([eventId, sectionId, row, seatNumber])
   @@map("booking_seats")
 }
 

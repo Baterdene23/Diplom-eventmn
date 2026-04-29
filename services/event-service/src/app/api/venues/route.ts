@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { z } from 'zod';
+import { type Prisma } from '@prisma/client';
 import { requireGatewaySignature } from '@/lib/internal-auth';
+import { LayoutTypeEnum, validateSeatLayoutJson } from '@/lib/layout';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +14,11 @@ const createVenueSchema = z.object({
   city: z.string().min(1, 'Хот сонгоно уу'),
   capacity: z.number().min(1, 'Багтаамж оруулна уу'),
   description: z.string().optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
   images: z.array(z.string()).optional(),
+  layoutType: LayoutTypeEnum.optional(),
+  layoutJson: z.custom<Prisma.InputJsonValue>().optional(),
   sections: z.array(z.object({
     id: z.string(),
     name: z.string(),
@@ -21,6 +27,17 @@ const createVenueSchema = z.object({
     price: z.number(),
     color: z.string().optional(),
   })).optional(),
+}).superRefine((data, ctx) => {
+  if (data.layoutJson) {
+    const res = validateSeatLayoutJson(data.layoutJson);
+    if (!res.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'layoutJson буруу байна',
+        path: ['layoutJson'],
+      });
+    }
+  }
 });
 
 // GET /api/venues - Бүх venue жагсаалт

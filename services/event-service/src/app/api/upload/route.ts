@@ -10,7 +10,8 @@ export const dynamic = 'force-dynamic';
 const UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads');
 
 // Allowed image types
-const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+// NOTE: Some clients report JPEG as image/jpg or image/pjpeg.
+const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/webp', 'image/gif'];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 // Generate unique filename

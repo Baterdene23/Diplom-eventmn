@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
 import { SeatMap } from '@/components/events/SeatMap';
+import { DynamicSeatMap } from '@/components/events/DynamicSeatMap';
 import { useBookingStore, useAuthStore } from '@/store';
 import { eventsApi, venuesApi, bookingApi } from '@/lib/api';
 import { formatDate, formatTime, formatPrice, cn, resolveEventImage } from '@/lib/utils';
@@ -25,6 +26,16 @@ interface Event {
   organizerName?: string;
   status: string;
   venueName?: string;
+  ticketInfo?: Array<{
+    sectionId?: string;
+    sectionName?: string;
+    rows?: number;
+    seatsPerRow?: number;
+    price?: number;
+    total?: number;
+    available?: number;
+    color?: string;
+  }>;
   // Online event fields
   isOnline?: boolean;
   meetingUrl?: string;
@@ -45,13 +56,23 @@ interface Venue {
     seatsPerRow: number;
     price: number;
     color: string;
+    capacity?: number;
   }>;
 }
 
 interface SeatStatus {
   locked: Array<{ sectionId: string; row: number; seatNumber: number; lockedBy: string }>;
   booked: Array<{ sectionId: string; row: number; seatNumber: number }>;
+  lockedBySeatId?: Record<string, string>;
+  bookedSeatIds?: string[];
 }
+
+type EventLayoutResponse = {
+  eventId: string;
+  layoutType: 'GRID' | 'CIRCULAR' | 'STADIUM' | 'FREE_FORM' | 'TABLE';
+  layoutJson: any;
+  source: 'event' | 'venue';
+};
 
 export default function EventDetailPage() {
   const params = useParams();
@@ -61,6 +82,7 @@ export default function EventDetailPage() {
   const [event, setEvent] = useState<Event | null>(null);
   const [venue, setVenue] = useState<Venue | null>(null);
   const [seatStatus, setSeatStatus] = useState<SeatStatus>({ locked: [], booked: [] });
+  const [eventLayout, setEventLayout] = useState<EventLayoutResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isLocking, setIsLocking] = useState(false);
@@ -108,6 +130,14 @@ export default function EventDetailPage() {
         const statusData = await bookingApi.getSeatsStatus(eventId) as SeatStatus;
         setSeatStatus(statusData);
 
+        // Get event layout (new)
+        try {
+          const layout = await (eventsApi as any).getLayout?.(eventId);
+          if (layout?.layoutType) setEventLayout(layout);
+        } catch {
+          setEventLayout(null);
+        }
+
         // Reset stale selection only when user opened a different event page.
         if (selectedEventId && selectedEventId !== eventId) {
           clearSeats();
@@ -146,18 +176,19 @@ export default function EventDetailPage() {
 
   // Handle seat click
   const handleSeatClick = useCallback((seat: {
+    seatId?: string;
     sectionId: string;
     sectionName: string;
-    row: number;
-    seatNumber: number;
+    row?: number;
+    seatNumber?: number;
     price: number;
   }) => {
     const isSelected = selectedSeats.some(
-      s => s.sectionId === seat.sectionId && s.row === seat.row && s.seatNumber === seat.seatNumber
+      s => (seat.seatId ? s.seatId === seat.seatId : (s.sectionId === seat.sectionId && (s.row || 0) === (seat.row || 0) && (s.seatNumber || 0) === (seat.seatNumber || 0)))
     );
 
     if (isSelected) {
-      removeSeat(seat.sectionId, seat.row, seat.seatNumber);
+      removeSeat({ seatId: seat.seatId, sectionId: seat.sectionId, row: seat.row, seatNumber: seat.seatNumber });
     } else {
       // Max 10 seats per booking
       if (selectedSeats.length >= 10) {
@@ -185,14 +216,19 @@ export default function EventDetailPage() {
       setIsLocking(true);
       
       // Lock selected seats
-      await bookingApi.lockSeats({
-        eventId,
-        seats: selectedSeats.map(s => ({
-          sectionId: s.sectionId,
-          row: s.row,
-          seatNumber: s.seatNumber,
-        })),
-      }, accessToken!);
+      const seatIds = selectedSeats.map((s) => s.seatId).filter(Boolean) as string[];
+      if (seatIds.length === selectedSeats.length && seatIds.length > 0) {
+        await bookingApi.lockSeats({ eventId, seatIds }, accessToken!);
+      } else {
+        await bookingApi.lockSeats({
+          eventId,
+          seats: selectedSeats.map((s) => ({
+            sectionId: s.sectionId,
+            row: (s.row || 0) as number,
+            seatNumber: (s.seatNumber || 0) as number,
+          })),
+        }, accessToken!);
+      }
 
       // Navigate to booking confirmation
       router.push(`/booking/confirm`);
@@ -295,6 +331,40 @@ export default function EventDetailPage() {
     'Мэдээлэл байхгүй';
 
   const totalPrice = getTotalPrice();
+
+  const effectiveSections = (() => {
+    if (venue?.sections && Array.isArray(venue.sections) && venue.sections.length > 0) {
+      return venue.sections;
+    }
+
+    const palette = ['#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#14b8a6', '#8b5cf6'];
+    const ticketInfo = Array.isArray(event.ticketInfo) ? event.ticketInfo : [];
+    if (ticketInfo.length === 0) {
+      return [];
+    }
+
+    return ticketInfo
+      .map((t, idx) => {
+        const total = typeof t.total === 'number' && Number.isFinite(t.total) ? Math.max(0, Math.floor(t.total)) : 0;
+        const seatsPerRow = typeof t.seatsPerRow === 'number' && Number.isFinite(t.seatsPerRow)
+          ? Math.max(1, Math.floor(t.seatsPerRow))
+          : 20;
+        const rows = typeof t.rows === 'number' && Number.isFinite(t.rows)
+          ? Math.max(1, Math.floor(t.rows))
+          : Math.max(1, Math.ceil(total / seatsPerRow));
+
+        return {
+          id: String(t.sectionId || `section-${idx}`),
+          name: String(t.sectionName || `Section ${idx + 1}`),
+          rows,
+          seatsPerRow,
+          price: typeof t.price === 'number' && Number.isFinite(t.price) ? t.price : 0,
+          color: String(t.color || palette[idx % palette.length]),
+          capacity: total,
+        };
+      })
+      .filter((s) => s.id && s.name && s.rows > 0 && s.seatsPerRow > 0);
+  })();
 
   const mapEmbedUrl = (() => {
     if (!venue) return '';
@@ -496,17 +566,28 @@ export default function EventDetailPage() {
             )}
 
             {/* Seat Selection - Only for physical events */}
-            {!event.isOnline && venue && venue.sections && venue.sections.length > 0 && (
+            {!event.isOnline && effectiveSections.length > 0 && (
               <div className="bg-white rounded-2xl p-6 shadow-sm">
                 <h2 className="text-lg font-semibold text-gray-900 mb-6">Суудал сонгох</h2>
-                <SeatMap
-                  sections={venue.sections}
-                  lockedSeats={seatStatus.locked}
-                  bookedSeats={seatStatus.booked}
-                  selectedSeats={selectedSeats}
-                  onSeatClick={handleSeatClick}
-                  currentUserId={user?.id}
-                />
+                {eventLayout?.layoutJson ? (
+                  <DynamicSeatMap
+                    layoutType={eventLayout.layoutType}
+                    layoutJson={eventLayout.layoutJson}
+                    lockedBySeatId={seatStatus.lockedBySeatId || {}}
+                    bookedSeatIds={seatStatus.bookedSeatIds || []}
+                    selected={selectedSeats as any}
+                    onToggleSeat={handleSeatClick as any}
+                  />
+                ) : (
+                  <SeatMap
+                    sections={effectiveSections}
+                    lockedSeats={seatStatus.locked}
+                    bookedSeats={seatStatus.booked}
+                    selectedSeats={selectedSeats as any}
+                    onSeatClick={handleSeatClick as any}
+                    currentUserId={user?.id}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -573,11 +654,11 @@ export default function EventDetailPage() {
                       Google Maps дээр нээх
                     </a>
 
-                    {venue.sections && venue.sections.length > 0 && (
+                    {effectiveSections.length > 0 && (
                       <div className="pt-2 border-t border-gray-100">
                         <p className="text-sm font-medium text-gray-800 mb-2">Заал / бүсүүд</p>
                         <div className="flex flex-wrap gap-2">
-                          {venue.sections.map((section) => (
+                          {effectiveSections.map((section) => (
                             <span
                               key={section.id}
                               className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-gray-50 text-gray-700 text-xs"
@@ -597,11 +678,11 @@ export default function EventDetailPage() {
               )}
 
               {/* Price Info */}
-              {venue && venue.sections && (
+              {effectiveSections.length > 0 && (
                 <div className="bg-white rounded-2xl p-6 shadow-sm">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Үнийн мэдээлэл</h3>
                   <div className="space-y-2">
-                    {venue.sections.map((section) => (
+                    {effectiveSections.map((section) => (
                       <div key={section.id} className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <div 
@@ -624,7 +705,7 @@ export default function EventDetailPage() {
       </div>
 
               {/* Fixed Bottom Bar - Selected Seats Summary - Only for physical events */}
-      {!event.isOnline && venue && venue.sections && venue.sections.length > 0 && (
+      {!event.isOnline && effectiveSections.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg">
           <div className="max-w-6xl mx-auto px-4 py-4">
             <div className="flex flex-col md:flex-row items-center justify-between gap-4">
@@ -641,9 +722,9 @@ export default function EventDetailPage() {
                           key={index}
                           className="inline-flex items-center gap-1 px-2 py-1 bg-primary-50 text-primary-700 text-sm rounded-lg"
                         >
-                          {seat.sectionName} - Эгнээ {seat.row}, Суудал {seat.seatNumber}
+                          {seat.sectionName} - {seat.seatId ? seat.seatId : `Эгнээ ${seat.row}, Суудал ${seat.seatNumber}`}
                           <button
-                            onClick={() => removeSeat(seat.sectionId, seat.row, seat.seatNumber)}
+                            onClick={() => removeSeat({ seatId: seat.seatId, sectionId: seat.sectionId, row: seat.row, seatNumber: seat.seatNumber })}
                             className="ml-1 hover:text-primary-900"
                           >
                             Устгах

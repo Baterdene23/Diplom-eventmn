@@ -54,11 +54,17 @@ export function resolveEventImage(
     ? `https://picsum.photos/seed/${fallbackSeed}/1200/800`
     : `https://picsum.photos/seed/${fallbackSeed}/800/600`;
 
+
   if (!imageUrl) return fallback;
 
   // Avoid Next image optimizer 400s when the file doesn't exist in /public.
   if (imageUrl.startsWith('/images/')) {
     return fallback;
+  }
+
+  // Uploaded event images are served via /uploads which is proxied server-side.
+  if (imageUrl.startsWith('/uploads/')) {
+    return imageUrl;
   }
 
   // Keep full absolute URLs as-is.

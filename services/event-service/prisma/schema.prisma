@@ -42,6 +42,14 @@ enum VenueType {
   OTHER
 }
 
+enum LayoutType {
+  GRID
+  CIRCULAR
+  STADIUM
+  FREE_FORM
+  TABLE
+}
+
 model Event {
   id              String        @id @default(uuid())
   title           String
@@ -49,6 +57,8 @@ model Event {
   category        EventCategory
   venueId         String?       // Optional for online events
   venueName       String?       // Optional for online events
+  layoutType       LayoutType    @default(GRID)
+  layoutJson       Json?
   startDate       DateTime
   endDate         DateTime
   images          String[]
@@ -86,8 +96,12 @@ model Venue {
   capacity    Int
   venueType   VenueType @default(OTHER)
   description String?
+  latitude    Float?
+  longitude   Float?
   images      String[]
   sections    Json?
+  layoutType  LayoutType @default(GRID)
+  layoutJson  Json?
   
   // Sports venue specific fields
   hasWrestlingRing  Boolean  @default(false)   // Бөхийн тавцан

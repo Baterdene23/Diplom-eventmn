@@ -3,8 +3,64 @@ import { prisma } from '@/lib/prisma';
 import { EventStatus, type Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { requireGatewaySignature } from '@/lib/internal-auth';
+import { LayoutTypeEnum, validateEventCategoryLayoutType, validateSeatLayoutJson } from '@/lib/layout';
 
 export const dynamic = 'force-dynamic';
+
+type EventCategory = 'CONCERT' | 'CONFERENCE' | 'WORKSHOP' | 'MEETUP' | 'SPORTS' | 'WRESTLING' | 'EXHIBITION' | 'OTHER';
+
+const INTEREST_TAG_TO_CATEGORY: Record<string, EventCategory> = {
+  'Концерт': 'CONCERT',
+  'Хурал & Семинар': 'CONFERENCE',
+  'Сургалт': 'WORKSHOP',
+  'Уулзалт': 'MEETUP',
+  'Спорт': 'SPORTS',
+  'Бөхийн барилдаан': 'WRESTLING',
+  'Үзэсгэлэн': 'EXHIBITION',
+};
+
+const CATEGORY_TO_INTEREST_TAG: Record<EventCategory, string> = {
+  CONCERT: 'Концерт',
+  CONFERENCE: 'Хурал & Семинар',
+  WORKSHOP: 'Сургалт',
+  MEETUP: 'Уулзалт',
+  SPORTS: 'Спорт',
+  WRESTLING: 'Бөхийн барилдаан',
+  EXHIBITION: 'Үзэсгэлэн',
+  OTHER: 'Бусад',
+};
+
+function uniqStrings(input: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    const v = String(raw || '').trim();
+    if (!v) continue;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+function mapTagToCategory(tag: string): EventCategory | null {
+  const cleaned = String(tag || '').trim();
+  if (!cleaned) return null;
+  const upper = cleaned.toUpperCase();
+  if (
+    upper === 'CONCERT' ||
+    upper === 'CONFERENCE' ||
+    upper === 'WORKSHOP' ||
+    upper === 'MEETUP' ||
+    upper === 'SPORTS' ||
+    upper === 'WRESTLING' ||
+    upper === 'EXHIBITION' ||
+    upper === 'OTHER'
+  ) {
+    return upper as EventCategory;
+  }
+  return INTEREST_TAG_TO_CATEGORY[cleaned] || null;
+}
 
 // Event үүсгэх validation
 const createEventSchema = z.object({
@@ -13,6 +69,8 @@ const createEventSchema = z.object({
   category: z.enum(['CONCERT', 'CONFERENCE', 'WORKSHOP', 'MEETUP', 'SPORTS', 'WRESTLING', 'EXHIBITION', 'OTHER']),
   venueId: z.string().min(1, 'Байршил сонгоно уу').optional(),
   venueName: z.string().min(1).optional(),
+  layoutType: LayoutTypeEnum.optional(),
+  layoutJson: z.custom<Prisma.InputJsonValue>().optional(),
   startDate: z.string().transform((str) => new Date(str)),
   endDate: z.string().transform((str) => new Date(str)),
   images: z.array(z.string()).optional(),
@@ -24,9 +82,12 @@ const createEventSchema = z.object({
   ticketInfo: z.array(z.object({
     sectionId: z.string(),
     sectionName: z.string(),
+    rows: z.number().int().min(1).optional(),
+    seatsPerRow: z.number().int().min(1).optional(),
     price: z.number().min(0, 'Үнэ 0-ээс бага байж болохгүй'),
     available: z.number().int().min(0, 'Available 0-ээс бага байж болохгүй'),
     total: z.number().int().min(0, 'Total 0-ээс бага байж болохгүй'),
+    color: z.string().optional(),
   })).optional(),
 }).superRefine((data, ctx) => {
   if (data.endDate.getTime() <= data.startDate.getTime()) {
@@ -47,6 +108,29 @@ const createEventSchema = z.object({
         });
       }
     });
+  }
+
+  if (data.layoutJson) {
+    const res = validateSeatLayoutJson(data.layoutJson);
+    if (!res.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'layoutJson буруу байна',
+        path: ['layoutJson'],
+      });
+    }
+  }
+
+  const lt = data.layoutType;
+  if (lt) {
+    const ok = validateEventCategoryLayoutType(data.category, lt);
+    if (!ok.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: ok.message,
+        path: ['layoutType'],
+      });
+    }
   }
 });
 
@@ -71,6 +155,7 @@ export async function GET(request: NextRequest) {
     const city = searchParams.get('city');
     const upcoming = searchParams.get('upcoming') === 'true';
     const tagsParam = searchParams.get('tags');
+    const recommend = searchParams.get('recommend') === 'true';
     const dateRange = searchParams.get('dateRange');
     const hasTickets = searchParams.get('hasTickets');
 
@@ -115,14 +200,31 @@ export async function GET(request: NextRequest) {
       ];
     }
 
-    if (tagsParam) {
-      const tags = tagsParam
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean);
-      if (tags.length > 0) {
+    const rawTags = tagsParam
+      ? tagsParam
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean)
+      : [];
+
+    const tags = rawTags.length > 0 ? uniqStrings(rawTags) : [];
+
+    if (recommend && tags.length > 0 && !category) {
+      const mapped = uniqStrings(
+        tags
+          .map(mapTagToCategory)
+          .filter((c): c is EventCategory => Boolean(c))
+      ) as EventCategory[];
+
+      // If interest tags are sent, prefer category-based matching.
+      // This allows using Mongolian UI tags while still matching events.
+      if (mapped.length > 0) {
+        where.category = { in: mapped };
+      } else {
         where.tags = { hasSome: tags };
       }
+    } else if (tags.length > 0) {
+      where.tags = { hasSome: tags };
     }
 
     if (dateRange) {
@@ -190,10 +292,18 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const orderBy: Prisma.EventOrderByWithRelationInput | Prisma.EventOrderByWithRelationInput[] =
+      recommend
+        ? [
+            { startDate: 'asc' },
+            { createdAt: 'desc' },
+          ]
+        : { startDate: 'asc' };
+
     const [events, total] = await Promise.all([
       prisma.event.findMany({
         where,
-        orderBy: { startDate: 'asc' },
+        orderBy,
         skip,
         take: limit,
       }),
@@ -220,6 +330,7 @@ export async function GET(request: NextRequest) {
         ...(venue?.city ? { city: venue.city } : null),
         ...(venue?.address ? { address: venue.address } : null),
         ...(!e.venueName && venue?.name ? { venueName: venue.name } : null),
+        ...(recommend ? { matchedInterest: CATEGORY_TO_INTEREST_TAG[e.category as EventCategory] || null } : null),
       };
     });
 
@@ -287,6 +398,30 @@ export async function POST(request: NextRequest) {
       organizerName: userName || 'Unknown',
       status: userRole === 'ADMIN' ? EventStatus.PUBLISHED : EventStatus.PENDING,
     };
+
+    // If venue is selected and layoutType/layoutJson not supplied, inherit from venue.
+    if (eventData.venueId && (!eventData.layoutType || !eventData.layoutJson)) {
+      const venue = await prisma.venue.findUnique({
+        where: { id: eventData.venueId },
+        select: { layoutType: true, layoutJson: true },
+      });
+
+      if (venue?.layoutType && !eventData.layoutType) {
+        (eventData as any).layoutType = venue.layoutType;
+      }
+      if (venue?.layoutJson && !eventData.layoutJson) {
+        (eventData as any).layoutJson = venue.layoutJson;
+      }
+    }
+
+    // Enforce category-layout compatibility.
+    const lt = (eventData as any).layoutType as any;
+    if (lt) {
+      const ok = validateEventCategoryLayoutType((eventData as any).category, lt);
+      if (!ok.ok) {
+        return NextResponse.json({ error: ok.message }, { status: 400 });
+      }
+    }
 
     const event = await prisma.event.create({ data: eventData });
 

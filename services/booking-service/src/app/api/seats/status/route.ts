@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getEventSeatsStatus } from '@/lib/redis';
+import { getEventSeatIdLocks, getEventSeatsStatus } from '@/lib/redis';
 import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
@@ -17,8 +17,11 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Redis-ээс түгжигдсэн суудлууд
-    const lockedSeats = await getEventSeatsStatus(eventId);
+    // Redis-ээс түгжигдсэн суудлууд (legacy + v2)
+    const [lockedSeats, lockedSeatIds] = await Promise.all([
+      getEventSeatsStatus(eventId),
+      getEventSeatIdLocks(eventId),
+    ]);
 
     // Database-аас захиалагдсан суудлууд (CONFIRMED)
     const bookedSeats = await prisma.bookingSeat.findMany({
@@ -29,6 +32,7 @@ export async function GET(request: NextRequest) {
         },
       },
       select: {
+        seatId: true,
         sectionId: true,
         row: true,
         seatNumber: true,
@@ -47,16 +51,27 @@ export async function GET(request: NextRequest) {
       });
     });
 
-    const booked = bookedSeats.map(seat => ({
-      sectionId: seat.sectionId,
-      row: seat.row,
-      seatNumber: seat.seatNumber,
-    }));
+    const booked = bookedSeats
+      .filter((seat) => typeof seat.row === 'number' && typeof seat.seatNumber === 'number')
+      .map(seat => ({
+        sectionId: seat.sectionId,
+        row: seat.row as number,
+        seatNumber: seat.seatNumber as number,
+      }));
+
+    const bookedSeatIds = bookedSeats.map((s) => s.seatId).filter((v): v is string => Boolean(v));
+
+    const lockedBySeatId: Record<string, string> = {};
+    lockedSeatIds.forEach((userId, seatId) => {
+      lockedBySeatId[seatId] = userId;
+    });
 
     return NextResponse.json({
       eventId,
       locked,  // Түгжигдсэн (10 минут хүлээж байгаа)
       booked,  // Захиалагдсан (төлбөр хийгдсэн)
+      lockedBySeatId,
+      bookedSeatIds,
     });
   } catch (error) {
     console.error('Get seats status error:', error);

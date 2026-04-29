@@ -473,9 +473,12 @@ export default function CreateEventPage() {
             return {
               sectionId: section.id,
               sectionName: section.name,
+              rows: section.rows,
+              seatsPerRow: section.seatsPerRow,
               price: section.price,
               total: section.total,
               available: section.total,
+              color: section.color,
             };
           });
 

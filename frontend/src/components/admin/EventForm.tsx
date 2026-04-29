@@ -13,6 +13,9 @@ interface TicketSection {
   price: number;
   total: number;
   available?: number;
+  rows?: number;
+  seatsPerRow?: number;
+  color?: string;
 }
 
 interface Venue {
@@ -96,9 +99,12 @@ export default function EventForm({ eventId }: EventFormProps) {
             ? event.ticketInfo.map((s: any) => ({
                 sectionId: s.sectionId,
                 sectionName: s.sectionName,
+                rows: typeof s.rows === 'number' ? s.rows : undefined,
+                seatsPerRow: typeof s.seatsPerRow === 'number' ? s.seatsPerRow : undefined,
                 price: Number(s.price) || 0,
                 total: Number(s.total) || 0,
                 available: Number(s.available) || Number(s.total) || 0,
+                color: typeof s.color === 'string' ? s.color : undefined,
               }))
             : [];
           setTicketSections(sections);
@@ -177,9 +183,12 @@ export default function EventForm({ eventId }: EventFormProps) {
         ticketInfo: ticketSections.map((s) => ({
           sectionId: s.sectionId,
           sectionName: s.sectionName,
+          rows: s.rows,
+          seatsPerRow: s.seatsPerRow,
           price: s.price,
           total: s.total,
           available: s.available ?? s.total,
+          color: s.color,
         })),
       };
 

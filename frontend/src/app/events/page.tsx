@@ -251,7 +251,7 @@ export default function EventsPage() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Эвент, байршил, зохион байгуулагч хайх..."
+                placeholder="Арга хэмжээ хайх..."
                 className="w-full h-10 sm:h-11 px-4 rounded-full border border-gray-200 bg-white text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-200"
               />
             </form>
@@ -318,9 +318,9 @@ export default function EventsPage() {
           </div>
          ) : filteredEvents.length === 0 ? (
           <div className="text-center py-20">
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">Эвент олдсонгүй</h3>
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">Арга хэмжээ олдсонгүй</h3>
             <p className="text-gray-500 mb-6 max-w-md mx-auto">
-              Таны хайлтад тохирох эвент байхгүй байна. Өөр түлхүүр үгээр хайна уу.
+              Таны хайлтад тохирох арга хэмжээ байхгүй байна. Өөр түлхүүр үгээр хайна уу.
             </p>
            <button
               onClick={() => {
